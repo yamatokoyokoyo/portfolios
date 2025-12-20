@@ -66,6 +66,7 @@ Lv <span id="level">1</span> / 💰 <span id="gold">10</span>G / ⚔️ ATK <spa
 <div class="enemy" id="enemy">🟢</div>
 <div class="bar"><div class="hp" id="enemyHp"></div></div>
 <div id="enemyInfo"></div>
+<div>🔥 必殺CT: <span id="skillCT">0</span></div>
 
 <button id="attack">攻撃</button>
 <button id="skill">🔥 必殺</button>
@@ -80,6 +81,9 @@ Lv <span id="level">1</span> / 💰 <span id="gold">10</span>G / ⚔️ ATK <spa
 <button id="buySkill">スキル強化 (100G)</button>
 <button id="buyPotion">🧪 ポーション購入 (5G)</button>
 <button id="buySkillItem">🔥 スキルアイテム購入 (20G)</button>
+<button id="buyPoison">☠ 毒攻撃習得 (150G)</button>
+<button id="buyBurn">🔥 火傷攻撃習得 (200G)</button>
+<button id="buyCure">✨ 状態異常回復 (100G)</button>
 </div>
 
 <div id="popup">LEVEL UP!</div>
@@ -124,20 +128,37 @@ let isBoss=false;
 let autoBattle=false;
 let critStreak=0, combo=0, defeatedEnemies=0;
 let potionCount=0, skillItemCount=0;
+let skillCooldown = 0;
+// ===== 状態異常 =====
+let playerStatus = { poison:0, burn:0 };
+let enemyStatus  = { poison:0, burn:0 };
+
+// ===== 習得スキル =====
+let learnedSkills = {
+ poisonAttack:false,
+ burnAttack:false,
+ cure:false
+};
+
 
 // ===== DOM =====
 const $=id=>document.getElementById(id);
 
 // ===== 計算 =====
-function atk(){
- let d=1+swordLv*5;
- if(Math.random()<0.15){
-   d*=2; critStreak++; combo++;
-   if(combo>=5) checkAchi("連続コンボ5回");
- } else { critStreak=0; combo=0; }
- return d;
+function reduce(d, penetration = 0){
+  // 防具の軽減率（最大60%）
+  const rate = Math.min(0.6, armorLv * 0.04);
+
+  // ダメージ計算（貫通考慮）
+  const reduced = d * (1 - rate) * (1 - penetration);
+
+  // ステージごとの最低ダメージ保証
+  const minDamage = stage === 2 ? 5 : 3;
+
+  return Math.max(minDamage, Math.floor(reduced));
 }
-function reduce(d){ return Math.max(1,d-armorLv*2); }
+
+
 
 // ===== 敵生成 =====
 function spawn(){
@@ -145,14 +166,17 @@ function spawn(){
   if(stage === 2 && level % 10 === 0){
     isBoss = true;
     enemy = {...boss, atk: boss.atk * s.atk, hp: boss.hp * level * s.hp};
+    enemy.penetration = stage === 2 ? 0.3 : 0; 
     enemyMaxHp = enemy.hp;
-  } else {
-    isBoss = false;
-    const stageEnemies = enemies.filter(e => e.stage === stage);
-    const base = stageEnemies[Math.floor(Math.random()*stageEnemies.length)];
-    enemy = {...base, atk: base.atk * s.atk, hp: base.hp * level * s.hp};
-    enemyMaxHp = enemy.hp;
-  }
+ } else {
+  isBoss = false;
+  const stageEnemies = enemies.filter(e => e.stage === stage);
+  const base = stageEnemies[Math.floor(Math.random()*stageEnemies.length)];
+  enemy = {...base, atk: base.atk * s.atk, hp: base.hp * level * s.hp};
+  enemy.penetration = stage === 2 ? 0.2 : 0; // 魔王城通常敵も少し貫通
+  enemyMaxHp = enemy.hp;
+}
+
   enemyHp = enemyMaxHp;
   $("enemy").textContent = enemy.icon;
   $("enemyInfo").textContent = `${enemy.name} HP:${Math.floor(enemyHp)}`;
@@ -165,13 +189,14 @@ function update(){
  $("playerHp").style.width = (playerHp/playerMaxHp*100) + "%";
  $("level").textContent = level;
  $("gold").textContent = Math.floor(gold);
- $("atk").textContent = atk();
  $("php").textContent = Math.floor(playerHp);
  $("sword").textContent = swordLv;
  $("armor").textContent = armorLv;
  $("skillLv").textContent = skillLv;
  $("potionCount").textContent = potionCount;
  $("skillItemCount").textContent = skillItemCount;
+ $("skillCT").textContent = skillCooldown;
+$("atk").textContent = baseAtk();
 }
 
 // ===== ダメージ演出 =====
@@ -185,9 +210,16 @@ function showDamage(d,color="yellow"){
 }
 
 // ===== 攻撃 =====
-$("attack").onclick=()=> attackEnemy(atk());
 function attackEnemy(d){
  enemyHp -= d;
+  enemyHp = Math.max(0, enemyHp);
+ // 状態異常付与（プレイヤー）
+if(learnedSkills.poisonAttack && Math.random() < 0.3){
+ enemyStatus.poison = 3;
+}
+if(learnedSkills.burnAttack && Math.random() < 0.2){
+ enemyStatus.burn = 2;
+}
  showDamage(d, "yellow");
  if(enemyHp <=0){
    enemyHp=0;
@@ -202,32 +234,135 @@ function attackEnemy(d){
  } else enemyAttack();
  update();
 }
-
 // ===== 敵攻撃 =====
 function enemyAttack(){
- let d=reduce(enemy.atk);
- playerHp -= d;
- showDamage(d,"red");
- if(playerHp <=0) gameOver();
- update();
+  // ===== 敵の状態異常 =====
+  if(enemyStatus.poison > 0){
+  const dmg = Math.max(5, Math.floor(enemyMaxHp * 0.04));
+  enemyHp -= dmg;
+  enemyHp = Math.max(0, enemyHp); // ← 追加
+  showDamage(dmg,"purple");
+  enemyStatus.poison--;
 }
 
-// ===== 必殺 =====
-$("skill").onclick=()=>{
- if(skillLv<=0) return;
- const d=atk()*2 + skillLv*5;
- enemyHp -= d;
- showDamage(d,"orange");
- if(enemyHp<=0){
-   enemyHp=0;
-   gold += enemy.gold*2;
-   dropItem();
-   if(isBoss) checkAchi("ボス撃破");
-   levelUp();
-   spawn();
- } else enemyAttack();
+if(enemyStatus.burn > 0){
+  enemyHp -= 8;
+  enemyHp = Math.max(0, enemyHp); // ← 追加
+  showDamage(8,"orange");
+  enemyStatus.burn--;
+}
+
+
+  // 状態異常で倒れた場合は敵の攻撃をスキップ
+  if(enemyHp <= 0){
+    enemyHp = 0;
+    gold += enemy.gold * stages[stage].gold; // ドロップ処理など必要に応じ追加
+    defeatedEnemies++;
+    dropItem();
+    if(isBoss) checkAchi("ボス撃破");
+    if(defeatedEnemies>=10) checkAchi("敵10体撃破");
+    levelUp();
+    spawn();
+    checkAchi("初勝利");
+    update();
+    return;
+  }
+
+  let d = enemy.atk;
+  // 敵スキルなどここから続く...
+
+ // 敵スキル
+ if(enemy.skill === "rage" && Math.random() < 0.3){
+   d *= 1.5;
+   $("enemyInfo").textContent = enemy.name + " は激昂した！";
+ }
+
+ d = reduce(d, enemy.penetration || 0);
+ playerHp -= d;
+ showDamage(d,"red");
+
+ if(playerHp <=0) gameOver();
  update();
+ endTurn();
+}
+function baseAtk(){
+  return 1 + swordLv * 5;
+}
+
+// 攻撃時だけランダム処理
+$("attack").onclick = () => attackEnemy(calcAttack());
+
+function calcAttack(){
+  let d = baseAtk();
+  if(Math.random() < 0.15){
+    d *= 2;
+    critStreak++; combo++;
+    if(combo >= 5) checkAchi("連続コンボ5回");
+  } else {
+    critStreak = 0; combo = 0;
+  }
+  return d;
+}
+
+
+// ===== 必殺 =====
+$("skill").onclick = () => {
+  if(skillLv <= 0) return;
+  if(skillCooldown > 0){
+    alert(`⏳ クールタイム中 (${skillCooldown}ターン)`);
+    return;
+  }
+
+  const d = baseAtk() * 2 + skillLv * 5;
+  enemyHp -= d;
+  showDamage(d,"orange");
+
+  // スキルクールタイム設定
+  skillCooldown = Math.max(1, 5 - Math.floor(skillLv / 3));
+
+  if(enemyHp <= 0){
+    enemyHp = 0;
+    gold += enemy.gold*2;
+    dropItem();
+    if(isBoss) checkAchi("ボス撃破");
+    levelUp();
+    spawn();
+  } else {
+    enemyAttack();
+  }
+
+  // ターン終了処理を必ず呼ぶ
+  endTurn();
+  update();
 };
+
+//ターン終了処理を追加
+function endTurn(){
+  // 必殺クールタイム減少
+  if(skillCooldown > 0) skillCooldown--;
+
+  // プレイヤー状態異常処理
+  if(playerStatus.poison > 0){
+    const dmg = Math.max(3, Math.floor(playerMaxHp * 0.03));
+    playerHp -= dmg;
+    playerHp = Math.max(0, playerHp);
+    showDamage(dmg,"purple");
+    playerStatus.poison--;
+  }
+
+  if(playerStatus.burn > 0){
+    const dmg = 5;
+    playerHp -= dmg;
+    playerHp = Math.max(0, playerHp);
+    showDamage(dmg,"orange");
+    playerStatus.burn--;
+  }
+  if(playerHp <=0) gameOver();
+  update();
+}
+
+
+
 
 // ===== ポーション・スキルアイテム使用 =====
 $("usePotion").onclick = () => {
@@ -340,7 +475,7 @@ $("autobattle").onclick=()=>{
 };
 function autoBattleLoop(){
  if(!autoBattle || playerHp<=0) return;
- attackEnemy(atk());
+attackEnemy(calcAttack());
  setTimeout(autoBattleLoop,800);
 }
 
@@ -369,22 +504,56 @@ function openAchievements(){
 
 // ===== セーブ/ロード =====
 function save(){
- localStorage.setItem("save",JSON.stringify({
-   level,gold,playerHp,swordLv,armorLv,skillLv,achi,stage,
-   firstBonusGiven,defeatedEnemies,critStreak,combo,
-   potionCount, skillItemCount
- }));
+  localStorage.setItem("save", JSON.stringify({
+    level,
+    gold,
+    playerHp,
+    swordLv,
+    armorLv,
+    skillLv,
+    achi,
+    stage,
+    firstBonusGiven,
+    defeatedEnemies,
+    critStreak,
+    combo,
+    potionCount,
+    skillItemCount,
+    skillCooldown,
+    playerStatus,
+    enemyStatus,
+    learnedSkills
+  }));
 }
 function load(){
- const d = JSON.parse(localStorage.getItem("save"));
- if(!d) return;
- ({
-   level,gold,playerHp,swordLv,armorLv,skillLv,achi,firstBonusGiven,
-   defeatedEnemies,critStreak,combo,potionCount,skillItemCount
- } = d);
- playerMaxHp = 30 + level*5;
- update();
+  const d = JSON.parse(localStorage.getItem("save"));
+  if(!d) return;
+  ({
+    level,
+    gold,
+    playerHp,
+    swordLv,
+    armorLv,
+    skillLv,
+    achi,
+    stage,
+    firstBonusGiven,
+    defeatedEnemies,
+    critStreak,
+    combo,
+    potionCount,
+    skillItemCount,
+    skillCooldown,
+    playerStatus,
+    enemyStatus,
+    learnedSkills
+  } = d);
+  playerMaxHp = 30 + level * 5;
+  playerHp = Math.min(playerHp, playerMaxHp);
+playerHp = Math.max(0, playerHp);
+  update();
 }
+
 
 // ===== 画面遷移 =====
 function openStage(){ $("title").style.display="none"; $("stageSelect").style.display="flex"; }
@@ -398,8 +567,32 @@ function startGame(s){
  update();
  playBGM();
 }
-function backTitle(){ location.reload(); }
-function gameOver(){ alert("💀 GAME OVER"); location.reload(); }
+function backTitle(){
+  $("game").style.display = "none";
+  $("stageSelect").style.display = "none";
+  $("achievements").style.display = "none";
+  $("title").style.display = "flex";
+}
+
+function gameOver(){
+  alert("💀 GAME OVER");
+
+  // プレイヤー回復
+  playerHp = playerMaxHp;
+
+  // 戦闘状態リセット
+  autoBattle = false;
+  skillCooldown = 0;
+  playerStatus = { poison:0, burn:0 };
+  enemyStatus  = { poison:0, burn:0 };
+  enemyHp = 0;
+  enemyMaxHp = 1;
+
+  save();
+  backTitle();
+}
+
+
 function deleteSave(){ if(confirm("セーブ削除しますか？")){ localStorage.removeItem("save"); alert("削除しました"); } }
 
 // ===== BGM =====
@@ -415,6 +608,32 @@ $("backToTitle").onclick = () => {
    backTitle();
  }
 };
+//スキル買う
+$("buyPoison").onclick = ()=>{
+ if(gold < 150) return alert("ゴールド不足");
+ gold -= 150;
+ learnedSkills.poisonAttack = true;
+ alert("☠ 毒攻撃を習得！");
+ update(); save();
+};
+
+$("buyBurn").onclick = ()=>{
+ if(gold < 200) return alert("ゴールド不足");
+ gold -= 200;
+ learnedSkills.burnAttack = true;
+ alert("🔥 火傷攻撃を習得！");
+ update(); save();
+};
+
+$("buyCure").onclick = ()=>{
+ if(gold < 100) return alert("ゴールド不足");
+ gold -= 100;
+ playerStatus.poison = 0;
+ playerStatus.burn = 0;
+ alert("✨ 状態異常を回復！");
+ update(); save();
+};
 </script>
 </body>
 </html>
+
