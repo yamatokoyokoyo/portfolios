@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Absolute Logic: WR Ayanokoji vs Blank - Full Rules</title>
+    <style>
+        :root { 
+            --bg: #0d0221; 
+            --ayanokoji: #58a6ff; 
+            --sora: #ff007f; 
+            --board-dark: #2a0944;
+            --board-light: #a12568;
+            --hint: rgba(0, 255, 255, 0.6); 
+            --wr-glow: rgba(255, 255, 255, 0);
+        }
+        body { background: var(--bg); color: #fff; font-family: 'Sawarabi Mincho', serif; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-x: hidden; transition: background 1s; }
+        .wr-mode { background: #1a1a1a !important; --wr-glow: rgba(255, 255, 255, 0.2); }
+        h1 { color: var(--sora); letter-spacing: 8px; text-shadow: 0 0 20px var(--sora); margin-bottom: 20px; font-weight: 900; }
+        #board { display: grid; grid-template-columns: repeat(8, 70px); grid-template-rows: repeat(8, 70px); border: 10px solid #ff007f; box-shadow: 0 0 30px rgba(255,0,127,0.5), inset 0 0 50px var(--wr-glow); transition: 0.5s; }
+        .square { width: 70px; height: 70px; display: flex; justify-content: center; align-items: center; font-size: 50px; transition: 0.2s; cursor: pointer; }
+        .light { background: var(--board-light); color: #fff; }
+        .dark { background: var(--board-dark); color: #ff007f; }
+        .selected { background: #00ffff !important; box-shadow: 0 0 20px #00ffff; }
+        .hint { box-shadow: inset 0 0 25px var(--hint); border: 4px solid #00ffff; box-sizing: border-box; }
+        .check-sq { background: radial-gradient(circle, #fff 0%, transparent 70%) !important; animation: pulse 0.5s infinite; }
+        #side-panel { width: 420px; display: flex; flex-direction: column; gap: 20px; }
+        .panel-box { background: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 12px; border: 1px solid var(--sora); backdrop-filter: blur(5px); position: relative; overflow: hidden; }
+        #wr-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.1); display:none; pointer-events:none; }
+        .eval-bar { height: 20px; width: 100%; background: #222; border-radius: 10px; overflow: hidden; margin: 10px 0; border: 1px solid #fff; }
+        #eval-fill { height: 100%; width: 50%; background: linear-gradient(90deg, var(--sora) 0%, var(--ayanokoji) 100%); transition: 1.5s cubic-bezier(0.1, 0.7, 0.1, 1); }
+        #log-container { height: 350px; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 8px; font-size: 0.85em; }
+        .log-entry { padding: 10px; border-radius: 4px; background: rgba(0,0,0,0.4); border-left: 4px solid #aaa; animation: slideIn 0.3s ease-out; }
+        .log-entry.w { border-color: var(--ayanokoji); }
+        .log-entry.b { border-color: var(--sora); color: #ff99cc; }
+        .log-entry.skill { border-color: #00ffff; background: rgba(0, 255, 255, 0.1); font-weight: bold; text-shadow: 0 0 5px #00ffff; }
+        .btn { width: 100%; padding: 12px; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 1em; font-weight: bold; margin-top: 10px; transition: 0.3s; }
+        .btn-help { background: var(--ayanokoji); }
+        .btn-reset { background: #333; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <h1 id="title">『　』に敗北はない</h1>
+
+    <div id="main">
+        <div id="board-container">
+            <div id="board"></div>
+        </div>
+
+        <div id="side-panel">
+            <div class="panel-box">
+                <div id="wr-overlay"></div>
+                <div style="display:flex; justify-content:space-between; font-size:0.8em; font-weight:bold;">
+                    <span>空（『　』）</span>
+                    <span id="score-text">±0.0</span>
+                    <span>綾小路清隆</span>
+                </div>
+                <div class="eval-bar"><div id="eval-fill"></div></div>
+                <div id="advice-box" style="font-style:italic; font-size:0.9em; color:#aaa;">
+                    <span id="advice-text">「さあ、ゲームを始めよう。アッシェンテ！」</span>
+                </div>
+            </div>
+
+            <button class="btn btn-help" onclick="ayanokojiAction()">綾小路の「演算代行」</button>
+            
+            <div class="panel-box">
+                <div id="log-container"></div>
+            </div>
+
+            <button class="btn btn-reset" onclick="location.reload()">不戦勝（リセット）</button>
+        </div>
+    </div>
+
+<script>
+const PIECES = { 'wK':'♔','wQ':'♕','wR':'♖','wB':'♗','wN':'♘','wP':'♙','bK':'♚','bQ':'♛','bR':'♜','bB':'♝','bN':'♞','bP':'♟' };
+const VALS = { 'P': 100, 'N': 325, 'B': 335, 'R': 500, 'Q': 900, 'K': 20000 };
+let board = [], turn = 'w', selected = null, bestHints = [];
+let castleRights = { wK:true, wQ:true, bK:true, bQ:true };
+let enPassantTarget = null;
+let soraSkillUsed = false, wrModeActive = false;
+let positionHistory = [];
+
+function init() {
+    board = [
+        ['bR','bN','bB','bQ','bK','bB','bN','bR'],
+        ['bP','bP','bP','bP','bP','bP','bP','bP'],
+        ...Array(4).fill(0).map(()=>Array(8).fill('')),
+        ['wP','wP','wP','wP','wP','wP','wP','wP'],
+        ['wR','wN','wB','wQ','wK','wB','wN','wR']
+    ];
+    render();
+    addLog('b', "「人類種を舐めるなよ。……チェックメイトまで、あと何手だ？」");
+}
+
+function getPseudoMoves(r, c, state, ep) {
+    const p = state[r][c]; if(!p) return [];
+    const color = p[0], type = p[1], moves = [], enemy = color === 'w' ? 'b' : 'w';
+    const dirs = { 
+        'R':[[1,0],[-1,0],[0,1],[0,-1]], 
+        'B':[[1,1],[1,-1],[-1,1],[-1,-1]], 
+        'Q':[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]], 
+        'N':[[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]], 
+        'K':[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]] 
+    };
+
+    if(type === 'P') {
+        const dir = color === 'w' ? -1 : 1;
+        // 1歩前進
+        if(state[r+dir] && !state[r+dir][c]) {
+            moves.push({r2:r+dir, c2:c});
+            // 2歩前進
+            if(((color==='w'&&r===6)||(color==='b'&&r===1)) && !state[r+2*dir][c]) {
+                moves.push({r2:r+2*dir, c2:c, isPawnTwo:true});
+            }
+        }
+        // 斜め取り
+        [1, -1].forEach(dc => {
+            let nc = c + dc;
+            if(state[r+dir] && state[r+dir][nc] && state[r+dir][nc][0] === enemy) {
+                moves.push({r2:r+dir, c2:nc});
+            } else if(ep && r+dir === ep.r && nc === ep.c) {
+                moves.push({r2:r+dir, c2:nc, isEp:true});
+            }
+        });
+    } else if(dirs[type]) {
+        dirs[type].forEach(([dr, dc]) => {
+            let nr = r + dr, nc = c + dc;
+            while(nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                if(!state[nr][nc]) { 
+                    moves.push({r2:nr, c2:nc}); 
+                    if(!"RBQ".includes(type)) break; 
+                } else { 
+                    if(state[nr][nc][0] === enemy) moves.push({r2:nr, c2:nc}); 
+                    break; 
+                }
+                nr += dr; nc += dc;
+            }
+        });
+    }
+    // キャスリング判定（PseudoMoves内）
+    if(type === 'K') {
+        const row = color === 'w' ? 7 : 0;
+        if(castleRights[color+'K'] && !state[row][5] && !state[row][6]) moves.push({r2:row, c2:6, isCastle:'K'});
+        if(castleRights[color+'Q'] && !state[row][1] && !state[row][2] && !state[row][3]) moves.push({r2:row, c2:2, isCastle:'Q'});
+    }
+    return moves;
+}
+
+function isCheck(color, state) {
+    let kr, kc;
+    for(let r=0; r<8; r++) for(let c=0; c<8; c++) if(state[r][c] === color+'K') { kr=r; kc=c; }
+    const enemy = color === 'w' ? 'b' : 'w';
+    for(let r=0; r<8; r++) for(let c=0; c<8; c++) {
+        if(state[r][c] && state[r][c][0] === enemy) {
+            const moves = getPseudoMoves(r, c, state, null);
+            if(moves.some(m => m.r2 === kr && m.c2 === kc)) return true;
+        }
+    }
+    return false;
+}
+
+function getLegalMoves(color, state, ep) {
+    let all = [];
+    for(let r=0; r<8; r++) for(let c=0; c<8; c++) {
+        if(state[r][c][0] === color) {
+            getPseudoMoves(r, c, state, ep).forEach(m => {
+                const n = state.map(row=>[...row]);
+                n[m.r2][m.c2] = n[r][c]; n[r][c] = '';
+                if(m.isEp) n[r][m.c2] = '';
+                if(m.isCastle === 'K') { n[r][5]=n[r][7]; n[r][7]=''; }
+                if(m.isCastle === 'Q') { n[r][3]=n[r][0]; n[r][0]=''; }
+                
+                // キャスリング中のマスが攻撃されていないか追加チェック
+                if(m.isCastle) {
+                    if(isCheck(color, state)) return;
+                    let step = m.isCastle==='K' ? 1 : -1;
+                    let n1 = state.map(row=>[...row]); n1[r][c+step]=n1[r][c]; n1[r][c]='';
+                    if(isCheck(color, n1)) return;
+                }
+                if(!isCheck(color, n)) all.push({r1:r, c1:c, ...m});
+            });
+        }
+    }
+    return all;
+}
+
+function applyMove(m) {
+    const p = board[m.r1][m.c1];
+    positionHistory.push(board.flat().join(''));
+    if(positionHistory.length > 20) positionHistory.shift();
+
+    if(m.isEp) board[m.r1][m.c2] = '';
+    if(m.isCastle === 'K') { board[m.r1][5]=board[m.r1][7]; board[m.r1][7]=''; }
+    if(m.isCastle === 'Q') { board[m.r1][3]=board[m.r1][0]; board[m.r1][0]=''; }
+    
+    board[m.r2][m.c2] = p; board[m.r1][m.c1] = '';
+    
+    // 昇格
+    if(p[1]==='P' && (m.r2===0 || m.r2===7)) board[m.r2][m.c2] = p[0]+'Q';
+
+    // 権利更新
+    if(p==='wK') { castleRights.wK=false; castleRights.wQ=false; }
+    if(p==='bK') { castleRights.bK=false; castleRights.bQ=false; }
+    if(p==='wR' && m.r1===7 && m.c1===7) castleRights.wK=false;
+    if(p==='wR' && m.r1===7 && m.c1===0) castleRights.wQ=false;
+    if(p==='bR' && m.r1===0 && m.c1===7) castleRights.bK=false;
+    if(p==='bR' && m.r1===0 && m.c1===0) castleRights.bQ=false;
+    
+    enPassantTarget = m.isPawnTwo ? {r:(m.r1+m.r2)/2, c:m.c1} : null;
+
+    addLog(turn, `${p[1]}を(${m.r2},${m.c2})へ。`);
+    turn = turn==='w'?'b':'w';
+    selected = null; bestHints = []; render(); updateEval();
+    if(turn==='b') setTimeout(aiTurn, 800);
+}
+
+function ayanokojiAction() {
+    if(turn !== 'w') return;
+    addLog('w', wrModeActive ? "「……深度6。最速で終わらせる。」" : "「……解析を開始する。」");
+    setTimeout(() => {
+        const moves = getLegalMoves('w', board, enPassantTarget);
+        let moveScores = [];
+        let depth = wrModeActive ? 6 : 3;
+        moves.forEach(m => {
+            const n = board.map(row=>[...row]); n[m.r2][m.c2]=n[m.r1][m.c1]; n[m.r1][m.c1]='';
+            let ev = minimax(n, depth, -Infinity, Infinity, false, enPassantTarget);
+            if (positionHistory.includes(n.flat().join(''))) ev -= 300; 
+            moveScores.push({ move: m, score: ev });
+        });
+        moveScores.sort((a, b) => b.score - a.score);
+        if(moveScores[0]) applyMove(moveScores[0].move);
+    }, 600);
+}
+
+async function aiTurn() {
+    const moves = getLegalMoves('b', board, enPassantTarget);
+    if(moves.length === 0) return;
+    let depth = 2;
+    const score = evaluate(board);
+    if(!soraSkillUsed && score > 400) {
+        addLog('skill', "空「……白、10手先まで全パターン確定したぞ。」");
+        depth = 4; soraSkillUsed = true;
+    }
+    if(!wrModeActive && score < -500) triggerWRMode();
+
+    let moveScores = [];
+    moves.forEach(m => {
+        const n = board.map(row=>[...row]); n[m.r2][m.c2]=n[m.r1][m.c1]; n[m.r1][m.c1]='';
+        let ev = minimax(n, depth, -Infinity, Infinity, true, enPassantTarget);
+        if (positionHistory.includes(n.flat().join(''))) ev += 300; 
+        moveScores.push({ move: m, score: ev });
+    });
+    moveScores.sort((a, b) => a.score - b.score);
+    const index = (wrModeActive && Math.random() < 0.25) ? 1 : 0; // WR中は空白が稀にミス
+    applyMove(moveScores[Math.min(index, moveScores.length-1)].move);
+}
+
+function minimax(state, depth, alpha, beta, isW, ep) {
+    if(depth === 0) return evaluate(state);
+    const moves = getLegalMoves(isW?'w':'b', state, ep);
+    if(moves.length === 0) return isCheck(isW?'w':'b', state) ? (isW?-50000:50000) : 0;
+    if(isW) {
+        let maxE = -Infinity;
+        for(let m of moves) {
+            const n = state.map(row=>[...row]); n[m.r2][m.c2]=n[m.r1][m.c1]; n[m.r1][m.c1]='';
+            maxE = Math.max(maxE, minimax(n, depth-1, alpha, beta, false, null));
+            alpha = Math.max(alpha, maxE); if(beta <= alpha) break;
+        }
+        return maxE;
+    } else {
+        let minE = Infinity;
+        for(let m of moves) {
+            const n = state.map(row=>[...row]); n[m.r2][m.c2]=n[m.r1][m.c1]; n[m.r1][m.c1]='';
+            minE = Math.min(minE, minimax(n, depth-1, alpha, beta, true, null));
+            beta = Math.min(beta, minE); if(beta <= alpha) break;
+        }
+        return minE;
+    }
+}
+
+function evaluate(state) {
+    let s = 0;
+    for(let r=0; r<8; r++) for(let c=0; c<8; c++) {
+        const p = state[r][c]; if(!p) continue;
+        s += (p[0]==='w'?1:-1) * (VALS[p[1]] + (p[0]==='w'?7-r:r)*5);
+    }
+    return s;
+}
+
+function triggerWRMode() {
+    wrModeActive = true;
+    document.body.classList.add('wr-mode');
+    document.getElementById('wr-overlay').style.display = 'block';
+    document.getElementById('board').style.borderColor = '#fff';
+    document.getElementById('title').textContent = "THE WHITE ROOM: MAXIMUM LOGIC";
+    addLog('skill', "綾小路「……少し、本気を出そう。」");
+}
+
+function updateEval() {
+    const s = evaluate(board);
+    document.getElementById('score-text').textContent = (s/100).toFixed(1);
+    const fill = Math.min(Math.max(50 + (s/20), 5), 95);
+    document.getElementById('eval-fill').style.width = fill + '%';
+}
+
+function addLog(type, msg) {
+    const container = document.getElementById('log-container');
+    const div = document.createElement('div');
+    div.className = `log-entry ${type}`;
+    div.innerHTML = `<strong>${type==='w'?'綾小路':'空'}:</strong> ${msg}`;
+    container.appendChild(div);
+}
+
+function render() {
+    const el = document.getElementById('board'); el.innerHTML = '';
+    const inCheck = isCheck(turn, board);
+    for(let r=0; r<8; r++) for(let c=0; c<8; c++) {
+        const sq = document.createElement('div');
+        sq.className = `square ${(r+c)%2===0?'light':'dark'}`;
+        if(selected?.r===r && selected?.c===c) sq.classList.add('selected');
+        if(bestHints.some(h=>h.r===r && h.c===c)) sq.classList.add('hint');
+        if(inCheck && board[r][c] === turn+'K') sq.classList.add('check-sq');
+        sq.textContent = PIECES[board[r][c]] || '';
+        sq.onclick = () => handleSquareClick(r,c);
+        el.appendChild(sq);
+    }
+}
+
+function handleSquareClick(r, c) {
+    if(turn === 'b') return;
+    if(selected && bestHints.some(h=>h.r===r && h.c===c)) {
+        const moves = getLegalMoves('w', board, enPassantTarget);
+        const move = moves.find(m => m.r1===selected.r && m.c1===selected.c && m.r2===r && m.c2===c);
+        if(move) { applyMove(move); return; }
+    }
+    if(board[r][c][0] === 'w') {
+        selected = {r, c};
+        const moves = getLegalMoves('w', board, enPassantTarget).filter(m => m.r1===r && m.c1===c);
+        bestHints = moves.map(m => ({r: m.r2, c: m.c2}));
+        render();
+    }
+}
+
+init();
+</script>
+</body>
+</html>
