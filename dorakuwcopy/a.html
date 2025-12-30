@@ -576,8 +576,30 @@ function dieAll(){
     [p.eq.W, p.eq.A, p.eq.R].forEach(i => { if(i?.gMult) gMult *= i.gMult; });
     let reward = Math.floor(totalG * gMult);
     if(p.soul === 'GOLD') reward *= 3;
-    p.gold += reward; p.evKills++;
-    
+    p.gold += reward; 
+    p.evKills++;
+    // 黄金郷イベント：討伐数マイルストーン報酬
+    if (p.evKills === 10) {
+        p.pot += 10;
+        addLog("🎁 イベント報酬: ポーション10個！", "#f1c40f");
+    } else if (p.evKills === 30) {
+        p.reb += 20;
+        addLog("🎁 イベント報酬: ダイヤ20個！", "#f1c40f");
+    } else if (p.evKills === 50) {
+        // 50体達成で超強力な限定装備
+        const eventItem = { 
+            id: Date.now(), 
+            type: "R", 
+            rarity: 3, 
+            name: "黄金の守護石", 
+            elem: "✨", 
+            val: 100, 
+            gMult: 2.0 
+        };
+        p.inventory.push(eventItem);
+        addLog("🏆 イベント完遂！限定装備『黄金の守護石』獲得！", "#f1c40f");
+    }
+    // --- ★ここまで ---
     if(eliteKill){
         p.reb += 2; // エリートを倒すとダイヤ2個
         addLog("✨ エリート撃破！ダイヤ💎+2", "#ff00ff");
@@ -727,16 +749,34 @@ function drawGacha10(){
 function drawEventGacha(){
     if(p.inventory.length >= 20 || p.reb < 10) return alert("💎不足 または 荷物満杯");
     p.reb -= 10;
+
     const pool = [
         {n:"★神器・天照", t:"W", v:500, g:2.5, r:3},
         {n:"★神器・八咫", t:"A", v:300, g:1.8, r:3},
         {n:"★黄金招き猫", t:"R", v:100, g:5.0, r:3}
     ];
+
     let res = pool[Math.floor(Math.random()*pool.length)];
     const item = { id: Date.now()+Math.random(), type:res.t, rarity:res.r, name:res.n, elem:"✨", val:res.v, gMult:res.g };
     p.inventory.push(item);
     
-    renderGachaResult([item]); // ★結果を表示！
+    // --- ★ここから修正：イベント画面の結果エリアを書き換える ---
+    const resArea = document.getElementById("evGRes");
+    if(resArea) {
+        resArea.innerHTML = `
+            <div style="text-align:center; padding:10px; border:2px solid #f1c40f; border-radius:10px; background:rgba(241,196,15,0.1)">
+                <div style="font-size:10px; color:#aaa;">✨ 限定アイテム獲得 ✨</div>
+                <div style="font-size:18px; color:#f1c40f; font-weight:bold; margin:5px 0;">${item.name}</div>
+                <div style="font-size:11px; color:#fff;">
+                    性能: +${item.val} / 金×${item.gMult}<br>
+                    <span style="color:#00d2d3;">(装備品一覧へ追加されました)</span>
+                </div>
+            </div>
+        `;
+    }
+    // --- ★ここまで ---
+
+    addLog(`✨ 黄金郷ガチャ: ${item.name} を入手！`, "#f1c40f");
     update();
 }
 function buyShop(t){
